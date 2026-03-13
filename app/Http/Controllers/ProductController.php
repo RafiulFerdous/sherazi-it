@@ -3,10 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Http\Resources\ProductResource;
+use App\Http\Resources\SalesReportResource;
 use App\Models\Product;
 use App\Models\Category;
 use App\Models\Order;
 use http\Env\Response;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
@@ -66,24 +68,45 @@ class ProductController extends Controller
 //        return response()->json($result);
     }
 
-    public function salesReport()
+    public function salesReport():JsonResponse
     {
-        $orders = Order::all();
+        try{
+            $orders=Order::with(['customer','items.product'])->latest()->paginate(15);
 
-        $report = [];
-        foreach ($orders as $order) {
-            foreach ($order->items as $item) {
-                $report[] = [
-                    'order_id'     => $order->id,
-                    'product_name' => $item->product->name,
-                    'qty'          => $item->quantity,
-                    'total'        => $item->quantity * $item->product->price,
-                    'customer'     => $order->customer->name,
-                ];
-            }
+            return response()->json([
+                'status'=>'success',
+                'message'=>'Sales report List',
+                'data'=>SalesReportResource::collection($orders),
+                'meta'=>[
+                    'current_page'=>$orders->currentPage(),
+                    'last_page'=>$orders->lastPage(),
+                    'total'=>$orders->total(),
+                ]
+            ],200);
+        }catch (\Exception $e){
+            return response()->json([
+                'status'=>'error',
+                'message'=>'Failed to fetch sales report',
+                'message'=>$e->getMessage(),
+            ]);
         }
 
-        return response()->json($report);
+//        $orders = Order::all();
+//
+//        $report = [];
+//        foreach ($orders as $order) {
+//            foreach ($order->items as $item) {
+//                $report[] = [
+//                    'order_id'     => $order->id,
+//                    'product_name' => $item->product->name,
+//                    'qty'          => $item->quantity,
+//                    'total'        => $item->quantity * $item->product->price,
+//                    'customer'     => $order->customer->name,
+//                ];
+//            }
+//        }
+//
+//        return response()->json($report);
     }
 
     public function dashboard()
