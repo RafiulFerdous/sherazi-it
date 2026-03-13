@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -68,12 +69,21 @@ class OrderController extends Controller
         return response()->json($data);
     }
 
-    public function filterByStatus(Request $request)
+    public function filterByStatus(Request $request):JsonResponse
     {
-        $status = $request->input('status');
-
-        $orders = DB::select("SELECT * FROM orders WHERE status = '$status'");
+        $validated=$request->validate([
+            'status' => 'required|string|in:pending,completed,cancelled',
+        ]);
+        $orders=Order::query()
+            ->where('status',$validated['status'])
+            ->latest()
+            ->paginate(15);
 
         return response()->json($orders);
+//        $status = $request->input('status');
+//
+//        $orders = DB::select("SELECT * FROM orders WHERE status = '$status'");
+//
+//        return response()->json($orders);
     }
 }

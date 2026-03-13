@@ -150,9 +150,14 @@ class ProductController extends Controller
     public function search(Request $request)
     {
         $keyword = $request->input('q');
-        $products = Product::where('name', 'LIKE', '%' . $keyword . '%')
-            ->orWhere('description', 'LIKE', '%' . $keyword . '%')
-            ->get();
+
+        if(empty($keyword)) {
+            return response()->json([]);
+        }
+        $products=Product::whereFullText(['name'],$keyword)->limit(15)->get();
+//        $products = Product::where('name', 'LIKE', '%' . $keyword . '%')
+//            ->orWhere('description', 'LIKE', '%' . $keyword . '%')
+//            ->get();
 
         return response()->json($products);
     }
