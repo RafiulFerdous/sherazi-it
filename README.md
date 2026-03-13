@@ -90,6 +90,19 @@ foreach ($products as $product) {
 }
 ```
 
+Solution (eager load + paginate):
+
+```php
+public function index(Request $request)
+{
+    $products = Product::query()
+        ->with('category')
+        ->paginate(15);
+
+    return response()->json($products);
+}
+```
+
 - `app/Http/Controllers/OrderController.php` `index()`: `Order::all()` then per-order relation access triggers extra queries.
 
 ```php
@@ -99,6 +112,20 @@ foreach ($orders as $order) {
         'customer'    => $order->customer->name,
         'items_count' => $order->items->count(),
     ];
+}
+```
+
+Solution (eager load + `withCount` + paginate):
+
+```php
+public function index()
+{
+    $orders = Order::query()
+        ->with('customer')
+        ->withCount('items')
+        ->paginate(15);
+
+    return response()->json($orders);
 }
 ```
 
@@ -114,6 +141,37 @@ foreach ($orders as $order) {
 }
 ```
 
+Solution (paginate the report rows, eager load through relationships):
+
+```php
+public function salesReport()
+{
+    $rows = OrderItem::query()
+        ->with(['product', 'order.customer'])
+        ->paginate(15);
+
+    $report = $rows->getCollection()->map(function (OrderItem $item) {
+        return [
+            'order_id'     => $item->order_id,
+            'product_name' => $item->product->name,
+            'qty'          => $item->quantity,
+            'total'        => $item->quantity * $item->product->price,
+            'customer'     => $item->order->customer->name,
+        ];
+    });
+
+    return response()->json([
+        'data' => $report,
+        'meta' => [
+            'current_page' => $rows->currentPage(),
+            'per_page'     => $rows->perPage(),
+            'total'        => $rows->total(),
+            'last_page'    => $rows->lastPage(),
+        ],
+    ]);
+}
+```
+
 ### 2. Missing Caching (Plus Invalidation)
 
 - `app/Http/Controllers/ProductController.php` `dashboard()`: computed stats hit DB every request.
@@ -121,6 +179,31 @@ foreach ($orders as $order) {
 - Cache must invalidate when:
   - products change: `ProductController::store()` (and any update/delete endpoints you add)
   - orders change: `OrderController::store()` (affects sales report/dashboard totals)
+
+Solution (Redis cache tags recommended):
+
+- Set `.env` to use Redis: `CACHE_STORE=redis`
+- Cache reads with `Cache::tags(...)->remember(...)`
+- Invalidate with `Cache::tags(...)->flush()` on writes
+
+Example for `ProductController@index`:
+
+```php
+use Illuminate\Support\Facades\Cache;
+
+$page = (int) request('page', 1);
+
+$products = Cache::tags(['products'])
+    ->remember("products:index:page:$page", 60, function () {
+        return Product::query()->with('category')->paginate(15);
+    });
+```
+
+Example invalidation after creating a product:
+
+```php
+Cache::tags(['products', 'dashboard', 'sales-report'])->flush();
+```
 
 ### 3. No Pagination (Return-All Endpoints)
 
@@ -131,6 +214,14 @@ These endpoints currently load everything via `::all()` / `->get()` and return u
 - `GET /api/products/sales-report` (`ProductController@salesReport`)
 
 Target: paginate at 15 per page.
+
+Solution examples:
+
+```php
+Product::query()->with('category')->paginate(15);
+Order::query()->with('customer')->withCount('items')->paginate(15);
+OrderItem::query()->with(['product', 'order.customer'])->paginate(15);
+```
 
 ### 4. Database Indexing
 
@@ -144,6 +235,19 @@ Example of what is currently missing for products (no index on `name` / `sold_co
 ```php
 $table->string('name');
 $table->integer('sold_count')->default(0);
+```
+
+Solution (add indexes in migrations):
+
+```php
+$table->string('name')->index();
+$table->integer('sold_count')->default(0)->index();
+```
+
+For order status in `create_orders_table`:
+
+```php
+$table->string('status')->index();
 ```
 
 ### 5. No DB Transaction In Order Creation
@@ -164,6 +268,41 @@ foreach ($request->items as $item) {
 
 Target: wrap the whole operation in `DB::transaction(...)` and fail atomically.
 
+Solution (outline):
+
+```php
+return DB::transaction(function () use ($request) {
+    $order = Order::create([
+        'customer_id'  => $request->customer_id,
+        'total_amount' => 0,
+        'status'       => 'pending',
+    ]);
+
+    $totalAmount = 0;
+
+    foreach ($request->items as $item) {
+        $product = Product::query()->lockForUpdate()->find($item['product_id']);
+        if (!$product || $product->stock < $item['quantity']) {
+            abort(422, 'Product unavailable');
+        }
+
+        OrderItem::create([
+            'order_id'   => $order->id,
+            'product_id' => $product->id,
+            'quantity'   => $item['quantity'],
+            'unit_price' => $product->price,
+        ]);
+
+        $product->decrement('stock', $item['quantity']);
+        $totalAmount += $product->price * $item['quantity'];
+    }
+
+    $order->update(['total_amount' => $totalAmount]);
+
+    return response()->json($order, 201);
+});
+```
+
 ### 6. SQL Injection Risk
 
 `app/Http/Controllers/OrderController.php` `filterByStatus()` uses raw string interpolation:
@@ -174,6 +313,14 @@ $orders = DB::select("SELECT * FROM orders WHERE status = '$status'");
 ```
 
 Target: use query bindings or Eloquent (no raw interpolation).
+
+Solution (Eloquent + optional pagination):
+
+```php
+$status = $request->input('status');
+$orders = Order::query()->where('status', $status)->paginate(15);
+return response()->json($orders);
+```
 
 ### 7. Inefficient Counting & Aggregation
 
@@ -187,3 +334,12 @@ $topProducts   = Product::all()->sortByDesc('sold_count')->take(5)->values();
 ```
 
 Target: use database aggregates (`Product::count()`, `Order::sum(...)`, `orderByDesc(...)->limit(...)`, etc.).
+
+Solution:
+
+```php
+$totalProducts = Product::count();
+$totalOrders   = Order::count();
+$totalRevenue  = Order::sum('total_amount');
+$topProducts   = Product::query()->orderByDesc('sold_count')->limit(5)->get();
+```
