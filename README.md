@@ -1,59 +1,189 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Sherazi POS Interview Task (Laravel)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+This is a simplified POS (Point of Sale) backend used as an interview task. The code is intentionally written with performance and correctness issues to identify, fix, and explain.
 
-## About Laravel
+If you want the original task brief, see `README_TASK.md`.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Project Layout
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- Runnable Laravel app: this folder (`sherazi-pos-task/`)
+- Original extracted task code (not runnable by itself): `../sherazi-pos-task-clean/` (contains only `app/`, `routes/`, `database/`)
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Setup (MySQL)
 
-## Learning Laravel
+1. Install PHP dependencies:
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+```bash
+composer install
+```
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+2. Configure environment:
 
-## Laravel Sponsors
+```bash
+cp .env.example .env
+php artisan key:generate
+```
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+3. Create database and a dedicated user (recommended). Root without a password often fails with:
+`SQLSTATE[HY000] [1045] Access denied for user 'root'@'localhost' (using password: NO)`.
 
-### Premium Partners
+```sql
+CREATE DATABASE IF NOT EXISTS sherazi_pos;
+CREATE USER 'sherazi'@'%' IDENTIFIED BY 'sherazi_pass';
+GRANT ALL PRIVILEGES ON sherazi_pos.* TO 'sherazi'@'%';
+FLUSH PRIVILEGES;
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+Then update `.env`:
 
-## Contributing
+```dotenv
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=sherazi_pos
+DB_USERNAME=root
+DB_PASSWORD=
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+4. Run migrations and seed data:
 
-## Code of Conduct
+```bash
+php artisan migrate --seed
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+5. Start the server:
 
-## Security Vulnerabilities
+```bash
+php artisan serve
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Notes:
 
-## License
+- The default Laravel skeleton in this repo uses `SESSION_DRIVER=database`, so DB connectivity and migrations are required even for basic browsing.
+- API routes are wired in `bootstrap/app.php` via `->withRouting(api: ...)`.
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+## API Endpoints
+
+- `GET /api/products`
+- `POST /api/products`
+- `GET /api/products/search?q=...`
+- `GET /api/products/dashboard`
+- `GET /api/products/sales-report`
+- `GET /api/orders`
+- `POST /api/orders`
+- `GET /api/orders/filter?status=...`
+
+## What To Fix (Specific)
+
+The issues below reference the current code in this repo (controllers/migrations copied from the task).
+
+### 1. N+1 Query Problems
+
+- `app/Http/Controllers/ProductController.php` `index()`: `Product::all()` then per-item relation access (`$product->category`) triggers one query per product.
+
+```php
+$products = Product::all();
+foreach ($products as $product) {
+    $result[] = [
+        'category' => $product->category->name,
+    ];
+}
+```
+
+- `app/Http/Controllers/OrderController.php` `index()`: `Order::all()` then per-order relation access triggers extra queries.
+
+```php
+$orders = Order::all();
+foreach ($orders as $order) {
+    $data[] = [
+        'customer'    => $order->customer->name,
+        'items_count' => $order->items->count(),
+    ];
+}
+```
+
+- `app/Http/Controllers/ProductController.php` `salesReport()`: nested N+1 across `orders -> items -> product` and `order -> customer`.
+
+```php
+$orders = Order::all();
+foreach ($orders as $order) {
+    foreach ($order->items as $item) {
+        $item->product->name;
+        $order->customer->name;
+    }
+}
+```
+
+### 2. Missing Caching (Plus Invalidation)
+
+- `app/Http/Controllers/ProductController.php` `dashboard()`: computed stats hit DB every request.
+- `app/Http/Controllers/ProductController.php` `index()`: list endpoint has no cache layer.
+- Cache must invalidate when:
+  - products change: `ProductController::store()` (and any update/delete endpoints you add)
+  - orders change: `OrderController::store()` (affects sales report/dashboard totals)
+
+### 3. No Pagination (Return-All Endpoints)
+
+These endpoints currently load everything via `::all()` / `->get()` and return unbounded responses:
+
+- `GET /api/products` (`ProductController@index`)
+- `GET /api/orders` (`OrderController@index`)
+- `GET /api/products/sales-report` (`ProductController@salesReport`)
+
+Target: paginate at 15 per page.
+
+### 4. Database Indexing
+
+The task expects indexes for commonly searched/filtered/sorted columns. Check these migrations:
+
+- `database/migrations/2024_01_01_000002_create_products_table.php`
+- `database/migrations/2024_01_01_000004_create_orders_table.php`
+
+Example of what is currently missing for products (no index on `name` / `sold_count`):
+
+```php
+$table->string('name');
+$table->integer('sold_count')->default(0);
+```
+
+### 5. No DB Transaction In Order Creation
+
+`app/Http/Controllers/OrderController.php` `store()` creates an order, then items, then decrements stock. If one item fails, partial data can be persisted:
+
+```php
+$order = Order::create([...]);
+foreach ($request->items as $item) {
+    // early return here can leave a partially-created order
+    if (!$product || $product->stock < $item['quantity']) {
+        return response()->json(['error' => 'Product unavailable'], 422);
+    }
+    OrderItem::create([...]);
+    $product->decrement('stock', $item['quantity']);
+}
+```
+
+Target: wrap the whole operation in `DB::transaction(...)` and fail atomically.
+
+### 6. SQL Injection Risk
+
+`app/Http/Controllers/OrderController.php` `filterByStatus()` uses raw string interpolation:
+
+```php
+$status = $request->input('status');
+$orders = DB::select("SELECT * FROM orders WHERE status = '$status'");
+```
+
+Target: use query bindings or Eloquent (no raw interpolation).
+
+### 7. Inefficient Counting & Aggregation
+
+`app/Http/Controllers/ProductController.php` `dashboard()` loads entire tables into memory just to count/sum/sort:
+
+```php
+$totalProducts = Product::all()->count();
+$totalOrders   = Order::all()->count();
+$totalRevenue  = Order::all()->sum('total_amount');
+$topProducts   = Product::all()->sortByDesc('sold_count')->take(5)->values();
+```
+
+Target: use database aggregates (`Product::count()`, `Order::sum(...)`, `orderByDesc(...)->limit(...)`, etc.).
