@@ -2,29 +2,68 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Resources\ProductResource;
 use App\Models\Product;
 use App\Models\Category;
 use App\Models\Order;
+use http\Env\Response;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class ProductController extends Controller
 {
     public function index()
     {
-        $products = Product::all();
+        try{
+            $page=\request()->get('page',1);
+            $data=Cache::tags(['products'])->remember('products_page_{$page}.'.$page, 60*60*24, function() {
+                $products=Product::with('category')->orderBy('id','desc')->paginate(15);
 
-        $result = [];
-        foreach ($products as $product) {
-            $result[] = [
-                'id'       => $product->id,
-                'name'     => $product->name,
-                'price'    => $product->price,
-                'stock'    => $product->stock,
-                'category' => $product->category->name,
-            ];
+                return[
+                    'items'=>ProductResource::collection($products)->response()->getData()->data,
+                    'meta'=>[
+                        'current_page'=>$products->currentPage(),
+                        'last_page'=>$products->lastPage(),
+                        'total'=>$products->total(),
+                    ],
+                    'links'=>[
+                        'next'=>$products->nextPageUrl(),
+                        'prev'=>$products->previousPageUrl(),
+                    ]
+                ];
+
+
+            });
+
+            return response()->json([
+                'status'=>'success',
+                'message'=>'Product List',
+                'data'=>$data['items'],
+                'meta'=>$data['meta'],
+                'links'=>$data['links'],
+            ],200);
+        }catch(\Exception $e){
+            return response()->json([
+                'status'=>'error',
+                'message'=>'Failed to fetch products',
+                'message'=>$e->getMessage(),
+            ],500);
         }
 
-        return response()->json($result);
+//        $products = Product::all();
+//
+//        $result = [];
+//        foreach ($products as $product) {
+//            $result[] = [
+//                'id'       => $product->id,
+//                'name'     => $product->name,
+//                'price'    => $product->price,
+//                'stock'    => $product->stock,
+//                'category' => $product->category->name,
+//            ];
+//        }
+//
+//        return response()->json($result);
     }
 
     public function salesReport()
